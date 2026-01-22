@@ -7,16 +7,19 @@ Original file is located at
     https://colab.research.google.com/drive/1rv5YW_a--d56PQFJEOzmgjlYpF0T9Uk0
 """
 
-!pip install yfinance plotly pandas
+!pip install yfinance plotly pandas websocket-client
 
 import yfinance as yf
 import pandas as pd
+import websocket, json
 import time
 from datetime import datetime
 import plotly.graph_objects as go
 from IPython.display import display, clear_output
+import threading
 
 SYMBOL = "BTC-USD"
+BINANCE_SYMBOL = "btcusdt"
 UPPER_THRESHOLD = 105000
 LOWER_THRESHOLD = 95000
 
@@ -27,29 +30,51 @@ print("Downloading 1 week historical data...")
 df = yf.download(SYMBOL, period=BACKFILL_PERIOD, interval="5m", progress=False)
 df = df.reset_index()[["Datetime", "Close"]]
 df.columns = ["time", "price"]
-
 print("Backfill completed:", len(df), "records")
+
+stream_df = df.copy()
+
+def on_message(ws, message):
+    global stream_df
+    data = json.loads(message)
+
+    price = float(data["p"])
+    ts = datetime.fromtimestamp(data["E"]/1000)
+
+    new_row = pd.DataFrame([[ts, price]], columns=["time", "price"])
+    stream_df = pd.concat([stream_df, new_row]).tail(2000)
+
+def start_socket():
+    socket = f"wss://stream.binance.com:9443/ws/{BINANCE_SYMBOL}@trade"
+    ws = websocket.WebSocketApp(socket, on_message=on_message)
+    ws.run_forever()
+
+t = threading.Thread(target=start_socket, daemon=True)
+t.start()
+
+print("WebSocket connected. Live stream started.")
 
 try:
     while True:
-        live = yf.download(SYMBOL, period="1d", interval="1m", progress=False)
-        latest_time = live.index[-1]
-        latest_price = live[('Close', SYMBOL)].iloc[-1]
-        new_row = pd.DataFrame([[latest_time, latest_price]], columns=["time", "price"])
-        df = pd.concat([df, new_row]).tail(2000)
+        plot_df = stream_df.copy()
 
+        latest_time = plot_df.iloc[-1]["time"]
+        latest_price = plot_df.iloc[-1]["price"]
+
+        # Alert logic
         alert = ""
         if latest_price >= UPPER_THRESHOLD:
             alert = f"ALERT: Price crossed upper target {UPPER_THRESHOLD}"
         elif latest_price <= LOWER_THRESHOLD:
             alert = f"ALERT: Price dropped below support {LOWER_THRESHOLD}"
 
+        # Dashboard
         clear_output(wait=True)
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
-            x=df["time"],
-            y=df["price"],
+            x=plot_df["time"],
+            y=plot_df["price"],
             mode="lines",
             name="BTC Price"
         ))
@@ -58,7 +83,7 @@ try:
         fig.add_hline(y=LOWER_THRESHOLD, line_dash="dash", line_color="red")
 
         fig.update_layout(
-            title="BTC Price – 1 Week History + Live Updates (Every 10 min)",
+            title="BTC Price – 1 Week History + LIVE WebSocket Stream",
             xaxis_title="Time",
             yaxis_title="Price (USD)",
             template="plotly_dark",
@@ -71,13 +96,8 @@ try:
         if alert:
             print(alert)
 
-        print("\nNext live update in 30 seconds...")
+        print("\nDashboard refresh in 30 seconds...")
         time.sleep(LIVE_UPDATE_INTERVAL)
 
 except KeyboardInterrupt:
     print("System stopped.")
-
-import yfinance as yf
-SYMBOL = "BTC-USD"
-live = yf.download(SYMBOL, period="1d", interval="1m", progress=False)
-live.head()
