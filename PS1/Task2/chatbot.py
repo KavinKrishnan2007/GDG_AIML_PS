@@ -7,19 +7,23 @@ Original file is located at
     https://colab.research.google.com/drive/1AAQULXKFjMqsWE7JKif6jEd2uKrRVMxu
 """
 
-!pip install yfinance transformers torch feedparser pandas numpy matplotlib
+!pip install yfinance transformers torch feedparser pandas numpy matplotlib faiss-cpu sentence-transformers
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import feedparser
-import datetime
+import faiss
+import matplotlib.pyplot as plt
 from transformers import pipeline
+from sentence_transformers import SentenceTransformer
 
 sentiment_model = pipeline(
     "sentiment-analysis",
     model="ProsusAI/finbert"
 )
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2") # 6 LAYERS
 
 # PROSUS AI - MODEL PUBLISHER
 # FINBERT - MODEL NAME
@@ -30,15 +34,32 @@ COMPANY_TICKERS = {
     "google": "GOOGL",
     "amazon": "AMZN",
     "tesla": "TSLA",
-    "tejasnet" : "TEJASNET"
+    "tejasnet": "TEJASNET"
 }
 
-def extract_ticker(question):
-    question = question.lower()
-    for company, ticker in COMPANY_TICKERS.items():
-        if company in question:
-            return ticker
-    return None
+company_texts = [
+    "Apple is a consumer electronics and iPhone company",
+    "Microsoft is a software and cloud computing company",
+    "Google is a search engine and advertising company",
+    "Amazon is an e-commerce and cloud services company",
+    "Tesla is an electric vehicle and clean energy company",
+    "Tejas Networks is an Indian telecom equipment company"
+]
+
+company_names = list(COMPANY_TICKERS.keys())
+
+company_embeddings = embedding_model.encode(company_texts)
+dimension = company_embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(np.array(company_embeddings))
+
+def extract_ticker_semantic(question):
+    q_embedding = embedding_model.encode([question])
+    distances, indices = index.search(np.array(q_embedding), k=1)
+    best_match_idx = indices[0][0]
+    company = company_names[best_match_idx]
+    ticker = COMPANY_TICKERS[company]
+    return company.capitalize(), ticker
 
 def get_stock_data(ticker, period="3mo"):
     stock = yf.Ticker(ticker)
@@ -47,9 +68,7 @@ def get_stock_data(ticker, period="3mo"):
 
 def analyze_trend(df):
     df["Return"] = df["Close"].pct_change()
-
     recent_return = df["Return"].tail(5).mean()
-
     if recent_return > 0.01:
         return "up"
     elif recent_return < -0.01:
@@ -61,31 +80,22 @@ def fetch_news(company):
     url = f"https://news.google.com/rss/search?q={company}+stock"
     feed = feedparser.parse(url)
     articles = []
-
     for entry in feed.entries[:5]:
         articles.append(entry.title)
-
     return articles
 
 def analyze_news_sentiment(news_list):
     sentiments = sentiment_model(news_list)
-
     score = 0
     for s in sentiments:
         if s["label"] == "positive":
             score += 1
         elif s["label"] == "negative":
             score -= 1
-
     return score
 
 def stock_chatbot(question):
-    ticker = extract_ticker(question)
-
-    if ticker is None:
-        return "Sorry, I couldn't identify the company."
-
-    company = [k for k, v in COMPANY_TICKERS.items() if v == ticker][0].capitalize()
+    company, ticker = extract_ticker_semantic(question)
 
     df = get_stock_data(ticker)
     trend = analyze_trend(df)
@@ -103,29 +113,23 @@ def stock_chatbot(question):
         response += "The stock has been relatively stable.\n"
 
     if sentiment_score < 0:
-        response += "Recent news sentiment is mostly negative, which may explain the movement.\n"
+        response += "Recent news sentiment is mostly negative.\n"
     elif sentiment_score > 0:
-        response += "Recent news sentiment is mostly positive, supporting the price movement.\n"
+        response += "Recent news sentiment is mostly positive.\n"
     else:
         response += "News sentiment appears mixed.\n"
 
-    response += "\n Key News Headlines:\n"
-
+    response += "\nKey News Headlines:\n"
     for n in news:
         response += f"- {n}\n"
-    return response
 
-import matplotlib.pyplot as plt
+    return response
 
 def chatbot_with_stock_plot(question):
     response = stock_chatbot(question)
     print(response)
 
-    ticker = extract_ticker(question)
-    if ticker is None:
-        print("No ticker found for plotting.")
-        return
-
+    company, ticker = extract_ticker_semantic(question)
     df = get_stock_data(ticker, period="6mo")
 
     plt.figure(figsize=(12, 6))
@@ -135,5 +139,5 @@ def chatbot_with_stock_plot(question):
     plt.ylabel("Closing Price")
     plt.show()
 
-question = "Why did Tesla's stock drop "
+question = "Why did the Steve Jobs's company crash badly?"
 chatbot_with_stock_plot(question)
