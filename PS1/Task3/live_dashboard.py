@@ -61,14 +61,13 @@ try:
         latest_time = plot_df.iloc[-1]["time"]
         latest_price = plot_df.iloc[-1]["price"]
 
-        # Alert logic
         alert = ""
         if latest_price >= UPPER_THRESHOLD:
             alert = f"ALERT: Price crossed upper target {UPPER_THRESHOLD}"
         elif latest_price <= LOWER_THRESHOLD:
             alert = f"ALERT: Price dropped below support {LOWER_THRESHOLD}"
 
-        # Dashboard
+      
         clear_output(wait=True)
         fig = go.Figure()
 
